@@ -34,6 +34,7 @@ _PER_JOB_FIELDS = (
     "energy_kwh",
     "node:gpus",
     "placement",
+    "dependencies",
 )
 
 _PER_NODE_FIELDS = (
@@ -112,6 +113,8 @@ def _load_jobs(path: Path) -> list[dict[str, Any]]:
                 job["power_w_per_gpu"] = float(row["power_w_per_gpu"])
             if row.get("job_id"):
                 job["job_id"] = row["job_id"]
+            if row.get("dependencies"):
+                job["dependencies"] = row["dependencies"]
             jobs.append(job)
     return jobs
 
@@ -147,7 +150,7 @@ def _describe_nodes(nodes: tuple[tuple[int, int], ...]) -> str:
     return " + ".join(f"{gpus} GPU{'s' if gpus != 1 else ''} on node {node_id}" for node_id, gpus in nodes)
 
 
-_COMPUTED_JOB_FIELDS = ("node:gpus", "placement")
+_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies")
 
 
 def _write_per_job(result: ClusterSimResult, path: Path) -> None:
@@ -159,6 +162,7 @@ def _write_per_job(result: ClusterSimResult, path: Path) -> None:
             row = {field: getattr(job, field) for field in _PER_JOB_FIELDS if field not in _COMPUTED_JOB_FIELDS}
             row["node:gpus"] = _format_nodes(job.nodes)
             row["placement"] = _describe_nodes(job.nodes)
+            row["dependencies"] = json.dumps(list(job.dependencies)) if job.dependencies else ""
             writer.writerow(row)
 
 

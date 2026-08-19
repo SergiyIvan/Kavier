@@ -14,6 +14,7 @@ bare import stays light.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -40,11 +41,12 @@ class JobRecord:
     submit_s: float
     start_s: float
     end_s: float
-    wait_s: float  # start - submit (time queued)
+    wait_s: float  # start - ready_s (time queued after becoming ready)
     runtime_s: float  # end - start (equals the job's duration)
-    turnaround_s: float  # end - submit (wait + runtime)
+    turnaround_s: float  # end - ready_s (wait + runtime; ready_s = max(submit_s, max dep end_s))
     energy_kwh: float | None  # None when no per-GPU power is known
     nodes: tuple[tuple[int, int], ...]  # ((node_id, gpus_on_node), ...) the job was placed on
+    dependencies: tuple[str, ...]  # job_id strings this job depends on (empty when none)
 
     @property
     def submit_h(self) -> float:
@@ -163,13 +165,21 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
             nodes = row.get("nodes", 1)
             power = row.get("power_w_per_gpu")
             job_id = row.get("job_id", index)
+            deps_raw = row.get("dependencies")
         elif isinstance(row, (Sequence, tuple)) and not isinstance(row, (str, bytes)):
             submit_s, gpus, duration_s = row[0], row[1], row[2]
             nodes = row[3] if len(row) > 3 else 1
             power = None
             job_id = index
+            deps_raw = None
         else:
             raise TypeError(f"job {index} must be a mapping or a (submit_s, gpus, duration_s[, nodes]) tuple")
+        if deps_raw and isinstance(deps_raw, str):
+            dependencies: list[str] = json.loads(deps_raw)
+        elif isinstance(deps_raw, list):
+            dependencies = [str(d) for d in deps_raw]
+        else:
+            dependencies = []
         if submit_s is None or gpus is None or duration_s is None:
             raise ValueError(f"job {index} needs submit_s, gpus and duration_s")
         submit_f = float(submit_s)
@@ -189,9 +199,34 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
                 "duration_s": duration_f,
                 "nodes": int(nodes) if nodes else 1,
                 "power_w_per_gpu": power_f,
+                "dependencies": dependencies,
             }
         )
     return out
+
+
+def _validate_dependencies(jobs: list[dict]) -> None:
+    """Raise ``ValueError`` when any dependency is unknown or not strictly before the depending job.
+
+    A dependency ``dep_id`` is invalid when:
+    - its string form does not match any ``str(job_id)`` in the dataset, OR
+    - the dependency's ``submit_s`` >= the depending job's ``submit_s`` (must be strictly earlier).
+    """
+    id_to_submit: dict[str, float] = {str(j["job_id"]): j["submit_s"] for j in jobs}
+    for j in jobs:
+        for dep in j["dependencies"]:
+            dep = str(dep)
+
+            if dep not in id_to_submit:
+                raise ValueError(
+                    f"job {j['job_id']!r} depends on {dep!r}, which is not a known job_id"
+                )
+            if id_to_submit[dep] >= j["submit_s"]:
+                raise ValueError(
+                    f"job {j['job_id']} (submit_s={j['submit_s']}) depends on {dep} "
+                    f"(submit_s={id_to_submit[dep]}), but a dependency must have a strictly "
+                    f"earlier submit_s"
+                )
 
 
 def schedule(
@@ -237,6 +272,7 @@ def schedule(
     capacity = num_nodes * node_gpus
 
     norm = _normalise(jobs)
+    _validate_dependencies(norm)
     if oversized == Oversized.STRICT:
         for j in norm:
             if j["gpus"] > capacity:
@@ -245,7 +281,11 @@ def schedule(
                     f"{capacity} (num_nodes={num_nodes}, node_gpus={node_gpus}); "
                     f"use oversized='cap' or 'drop' to allow oversized jobs"
                 )
-    ejobs = [engine.Job(j["index"], j["submit_s"], j["gpus"], j["duration_s"], j["nodes"]) for j in norm]
+    # Resolve dependency job_id strings → integer indices
+    id_to_index: dict[str, int] = {str(j["job_id"]): j["index"] for j in norm}
+    for j in norm:
+        j["dep_indices"] = [id_to_index[d] for d in j["dependencies"]]
+    ejobs = [engine.Job(j["index"], j["submit_s"], j["gpus"], j["duration_s"], j["nodes"], tuple(j["dep_indices"])) for j in norm]
 
     spread = placement == PlacementStrategy.SPREAD
     if policy == Policy.DISTRIBUTED_FCFS:
@@ -258,6 +298,12 @@ def schedule(
         placements = engine.run_backfill_consolidated(ejobs, node_gpus, num_nodes, oversized, spread=spread)
 
     placed = {p.idx: p for p in placements}
+    # end_s keyed by job index — used to compute dependency-aware ready_s below.
+    idx_to_end_s: dict[int, float] = {
+        job["index"]: placed[job["index"]].start_s + job["duration_s"]
+        for job in norm
+        if job["index"] in placed
+    }
     records: list[JobRecord] = []
     for job in norm:
         placement = placed.get(job["index"])
@@ -267,6 +313,10 @@ def schedule(
         gpus = placement.gpus
         runtime_s = job["duration_s"]
         end_s = start_s + runtime_s
+        # ready_s: the moment the job became schedulable — submit time, or whenever its last
+        # dependency finished, whichever is later.
+        dep_ends = [idx_to_end_s[d] for d in job["dep_indices"] if d in idx_to_end_s]
+        ready_s = max(job["submit_s"], *dep_ends) if dep_ends else job["submit_s"]
         power = job["power_w_per_gpu"] if job["power_w_per_gpu"] is not None else default_watts_per_gpu
         energy_kwh = None if power is None else power * gpus * runtime_s / WS_PER_KWH
         records.append(
@@ -276,11 +326,12 @@ def schedule(
                 submit_s=job["submit_s"],
                 start_s=start_s,
                 end_s=end_s,
-                wait_s=start_s - job["submit_s"],
+                wait_s=start_s - ready_s,
                 runtime_s=runtime_s,
-                turnaround_s=end_s - job["submit_s"],
+                turnaround_s=end_s - ready_s,
                 energy_kwh=energy_kwh,
                 nodes=placement.nodes,
+                dependencies=tuple(job["dependencies"]),
             )
         )
 
