@@ -35,6 +35,7 @@ _PER_JOB_FIELDS = (
     "node:gpus",
     "placement",
     "dependencies",
+    "job_metadata",
 )
 
 _PER_NODE_FIELDS = (
@@ -115,6 +116,8 @@ def _load_jobs(path: Path) -> list[dict[str, Any]]:
                 job["job_id"] = row["job_id"]
             if row.get("dependencies"):
                 job["dependencies"] = row["dependencies"]
+            if "job_metadata" in (reader.fieldnames or []):
+                job["job_metadata"] = row["job_metadata"] or None  # treat empty string as None
             jobs.append(job)
     return jobs
 
@@ -150,7 +153,7 @@ def _describe_nodes(nodes: tuple[tuple[int, int], ...]) -> str:
     return " + ".join(f"{gpus} GPU{'s' if gpus != 1 else ''} on node {node_id}" for node_id, gpus in nodes)
 
 
-_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies")
+_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies", "job_metadata")
 
 
 def _write_per_job(result: ClusterSimResult, path: Path) -> None:
@@ -163,6 +166,7 @@ def _write_per_job(result: ClusterSimResult, path: Path) -> None:
             row["node:gpus"] = _format_nodes(job.nodes)
             row["placement"] = _describe_nodes(job.nodes)
             row["dependencies"] = json.dumps(list(job.dependencies)) if job.dependencies else ""
+            row["job_metadata"] = job.job_metadata if job.job_metadata is not None else ""
             writer.writerow(row)
 
 
