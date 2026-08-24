@@ -12,75 +12,38 @@ from jobs with very short reference JCTs inflating per-job ratios.
 "Patched jobs" are not shown as a ratio because they do not exist at X=0, so no
 well-defined reference exists for that group.
 
-The plot shows mean ± 1 std of these ratios across the SEEDS dimension.
+Fix-jobs (metadata "fix_job") are merged into their parent's metrics before aggregation.
 
 Two lines: "Baseline jobs" (-), "All jobs" (--).
 A ratio of 1.0 means no change vs. X=0; < 1.0 means faster (improvement).
 
 Usage:
-    python plot-exp-jct.py <results_dir>
+    python plot-exp-jct-ratio.py <results_dir>
 
 Output:
-    exp-jct.pdf  (written to the current working directory)
+    exp-jct-ratio.pdf  (written to the current working directory)
 """
 
 import sys
 import warnings
 from pathlib import Path
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-ITERATION_COUNT = 25
-PERCENTAGES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-SEEDS = list(range(1, ITERATION_COUNT + 1))
+matplotlib.use("Agg")
 
-VALID_METADATA = {"baseline", "patched"}
-PATCHING_ENTITIES = {"min_gpu_recommender", "avoid_oom_recommender"}
+# Import shared utilities (same directory)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from plot_utils import PERCENTAGES, SEEDS, load_and_merge, group_mean_jct  # noqa: E402
 
 # Percentage used as the all-baseline reference (denominator of every ratio).
 REFERENCE_PCT = 0
 
 
-def base_uid(uid: str) -> str:
-    """Strip a known patching-entity prefix from a UID, if present.
-
-    Patching entity names never contain dashes, so splitting on the first dash
-    and checking the prefix against PATCHING_ENTITIES is unambiguous.
-    """
-    parts = uid.split("-", 1)
-    if len(parts) == 2 and parts[0] in PATCHING_ENTITIES:
-        return parts[1]
-    return uid
-
-
-def load_and_validate(path: Path) -> pd.DataFrame:
-    """Load a per-jobs CSV and abort if any job_metadata value is outside VALID_METADATA."""
-    df = pd.read_csv(path)
-    if "job_metadata" not in df.columns:
-        sys.exit(f"ERROR: {path} has no 'job_metadata' column.")
-    bad = df[~df["job_metadata"].isin(VALID_METADATA)]
-    if not bad.empty:
-        values = bad["job_metadata"].unique().tolist()
-        sys.exit(
-            f"ERROR: {path} contains invalid job_metadata values: {values}. "
-            f"Only {sorted(VALID_METADATA)} are allowed."
-        )
-    return df
-
-
-def group_mean_jct(df: pd.DataFrame) -> dict[str, float]:
-    """Return mean turnaround_s for each group ("baseline", "patched", "all")."""
-    result: dict[str, float] = {"all": df["turnaround_s"].mean()}
-    for group in ("baseline", "patched"):
-        subset = df.loc[df["job_metadata"] == group, "turnaround_s"]
-        result[group] = float(subset.mean()) if not subset.empty else float("nan")
-    return result
-
-
 def build_reference(results_dir: Path) -> dict[str, float]:
-    """Compute reference mean JCT (s) per group at REFERENCE_PCT, averaged across all seeds.
+    """Compute reference mean JCT (h) per group at REFERENCE_PCT, averaged across all seeds.
 
     Returns {"baseline": float, "all": float}.
     "patched" is omitted — at X=0 all jobs are baseline, so no patched reference exists.
@@ -90,7 +53,7 @@ def build_reference(results_dir: Path) -> dict[str, float]:
         path = results_dir / f"kavier-X{REFERENCE_PCT}-s{seed}_per_jobs.csv"
         if not path.exists():
             sys.exit(f"ERROR: reference file not found: {path}")
-        df = load_and_validate(path)
+        df = load_and_merge(path)
         for group, val in group_mean_jct(df).items():
             if group in accum and not np.isnan(val):
                 accum[group].append(val)
@@ -119,7 +82,7 @@ def compute_ratios(results_dir: Path, ref: dict[str, float]) -> dict[str, np.nda
             path = results_dir / f"kavier-X{pct}-s{seed}_per_jobs.csv"
             if not path.exists():
                 sys.exit(f"ERROR: expected results file not found: {path}")
-            df = load_and_validate(path)
+            df = load_and_merge(path)
             for group, mean_jct in group_mean_jct(df).items():
                 if group in ref and not np.isnan(mean_jct):
                     data[group][i, j] = mean_jct / ref[group]
