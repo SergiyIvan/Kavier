@@ -131,3 +131,27 @@ def group_mean_jct(df: pd.DataFrame) -> dict[str, float]:
         subset = df.loc[df["job_metadata"] == group, "turnaround_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
+
+
+def group_mean_queuing(df: pd.DataFrame) -> dict[str, float]:
+    """Return mean queuing time in **hours** for each group: ``"baseline"``, ``"patched"``, ``"all"``.
+
+    Returns ``NaN`` for a group that has no rows (e.g. no patched jobs at X=0).
+    """
+    result: dict[str, float] = {"all": float(df["wait_s"].mean()) / 3600}
+    for group in ("baseline", "patched"):
+        subset = df.loc[df["job_metadata"] == group, "wait_s"]
+        result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
+    return result
+
+
+def group_mean_runtime(df: pd.DataFrame) -> dict[str, float]:
+    """Return mean run time in **hours** for each group: ``"baseline"``, ``"patched"``, ``"all"``.
+
+    Returns ``NaN`` for a group that has no rows (e.g. no patched jobs at X=0).
+    """
+    result: dict[str, float] = {"all": float(df["runtime_s"].mean()) / 3600}
+    for group in ("baseline", "patched"):
+        subset = df.loc[df["job_metadata"] == group, "runtime_s"]
+        result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
+    return result
