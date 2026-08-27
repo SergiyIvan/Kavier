@@ -35,7 +35,6 @@ _PER_JOB_FIELDS = (
     "node:gpus",
     "placement",
     "dependencies",
-    "job_metadata",
 )
 
 _PER_NODE_FIELDS = (
@@ -98,9 +97,11 @@ def _load_jobs(path: Path) -> list[dict[str, Any]]:
     """Parse the jobs CSV into canonical job dicts for :func:`kavier.sdk.cluster.schedule`."""
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        missing = {"submit_s", "gpus", "duration_s"} - set(reader.fieldnames or [])
+        fieldnames = reader.fieldnames or []
+        missing = {"submit_s", "gpus", "duration_s"} - set(fieldnames)
         if missing:
             raise ValueError(f"jobs CSV missing required column(s): {', '.join(sorted(missing))}")
+        metadata_cols = [f for f in fieldnames if f.startswith("metadata.")]
         jobs: list[dict[str, Any]] = []
         for row in reader:
             job: dict[str, Any] = {
@@ -116,8 +117,8 @@ def _load_jobs(path: Path) -> list[dict[str, Any]]:
                 job["job_id"] = row["job_id"]
             if row.get("dependencies"):
                 job["dependencies"] = row["dependencies"]
-            if "job_metadata" in (reader.fieldnames or []):
-                job["job_metadata"] = row["job_metadata"] or None  # treat empty string as None
+            if metadata_cols:
+                job["metadata"] = {col: row[col] for col in metadata_cols}
             jobs.append(job)
     return jobs
 
@@ -153,20 +154,29 @@ def _describe_nodes(nodes: tuple[tuple[int, int], ...]) -> str:
     return " + ".join(f"{gpus} GPU{'s' if gpus != 1 else ''} on node {node_id}" for node_id, gpus in nodes)
 
 
-_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies", "job_metadata")
+_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies")
 
 
-def _write_per_job(result: ClusterSimResult, path: Path) -> None:
+def _write_per_job(
+    result: ClusterSimResult,
+    path: Path,
+    job_metadata: dict[Any, dict[str, str]],
+) -> None:
+    # Collect the sorted union of all metadata column names so the header is stable.
+    meta_cols: list[str] = sorted({col for meta in job_metadata.values() for col in meta})
+    fieldnames = list(_PER_JOB_FIELDS) + meta_cols
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(_PER_JOB_FIELDS))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for job in result.jobs:
             row = {field: getattr(job, field) for field in _PER_JOB_FIELDS if field not in _COMPUTED_JOB_FIELDS}
             row["node:gpus"] = _format_nodes(job.nodes)
             row["placement"] = _describe_nodes(job.nodes)
             row["dependencies"] = json.dumps(list(job.dependencies)) if job.dependencies else ""
-            row["job_metadata"] = job.job_metadata if job.job_metadata is not None else ""
+            meta = job_metadata.get(job.job_id, {})
+            for col in meta_cols:
+                row[col] = meta.get(col, "")
             writer.writerow(row)
 
 
@@ -191,6 +201,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     try:
         jobs = _load_jobs(jobs_path)
+        job_metadata: dict[Any, dict[str, str]] = {
+            job["job_id"]: job.pop("metadata")
+            for job in jobs
+            if "metadata" in job and "job_id" in job
+        }
         result = schedule(
             jobs,
             policy=args.policy,
@@ -206,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(json.dumps(_summary(result), indent=2))
     if args.out:
         out_path = Path(args.out).expanduser()
-        _write_per_job(result, out_path)
+        _write_per_job(result, out_path, job_metadata)
         print(f"Per-job schedule → {out_path}", file=sys.stderr)
     if args.out_nodes:
         out_nodes_path = Path(args.out_nodes).expanduser()

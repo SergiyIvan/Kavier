@@ -72,11 +72,23 @@ reports per-job timings (wait, start/end, runtime, energy) plus cluster metrics 
 utilization, goodput, peak queue). A tiny example trace ships with Kavier — swap in your own:
 
 ```bash
-# trace columns: submit_s,gpus,duration_s[,nodes,power_w_per_gpu]
 uv run kavier cluster --jobs src/kavier/sdk/cluster/data/input/trace_example.csv \
   --policy consolidated-backfill --num-nodes 4 --node-gpus 8 \
   --out per_jobs.csv --out-nodes per_nodes.csv --plot timeline.pdf
 ```
+
+The input CSV columns:
+
+| Column | Required | Description |
+|---|---|---|
+| `submit_s` | ✓ | Job arrival time in seconds |
+| `gpus` | ✓ | Number of GPUs requested |
+| `duration_s` | ✓ | GPU-locked wall time in seconds |
+| `job_id` | | Unique identifier, defaults to row index |
+| `nodes` | | Number of nodes for gang placement (honoured by `consolidated-*` policies only) |
+| `power_w_per_gpu` | | Per-GPU power draw in watts; used for energy estimates |
+| `dependencies` | | JSON-encoded array of `job_id` strings this job waits for, e.g. `["job-1","job-2"]`. Each dependency must have a strictly earlier `submit_s`. The job becomes eligible to run only after all dependencies finish — `wait_s` is measured from that point. |
+| `metadata.*` | | Any number of columns whose names start with `metadata.` (e.g. `metadata.owner`). Values are carried through unchanged to the output CSV. |
 
 Four `--policy` values pick the scheduling discipline **and** the placement mode. `distributed-fcfs`
 (strict First-Come-First-Served) and `distributed-backfill` (FIFO + aggressive backfill so small jobs
@@ -88,9 +100,20 @@ on exactly that many distinct, co-located nodes (evenly split, one replica per n
 wider — waiting until such a placement is free rather than fragmenting across nodes.
 
 The cluster is a homogeneous `--num-nodes × --node-gpus` datacenter (both required). Per-job results go
-to `--out` (CSV) — including a `node:gpus` column naming the node(s) each job was placed on and how many
-GPUs on each, e.g. `0:8;1:2`, plus a human-readable `placement` column (`8 GPUs on node 0 + 2 GPUs on
-node 1`).
+to `--out` (CSV). The output contains all input columns plus the following:
+
+| Column | Description |
+|---|---|
+| `start_s` | Time the job started running (seconds) |
+| `end_s` | Time the job finished (seconds) |
+| `wait_s` | Time spent queued after becoming eligible — measured from `submit_s` or the last dependency's `end_s`, whichever is later |
+| `runtime_s` | Actual wall time on the cluster (equals `duration_s`) |
+| `turnaround_s` | `wait_s + runtime_s` — total elapsed time from eligibility to completion |
+| `energy_kwh` | Energy consumed (`power_w_per_gpu × gpus × runtime_s`); empty when no power is known |
+| `node:gpus` | Node assignment, e.g. `0:8;1:2` (node\_id:gpus, semicolon-separated) |
+| `placement` | Human-readable placement, e.g. `8 GPUs on node 0 + 2 GPUs on node 1` |
+| `metadata.*` | Input `metadata.*` columns carried through verbatim |
+
 Per-node results go to `--out-nodes` (utilisation, jobs hosted, peak GPUs, idle time, energy). The
 cluster summary prints as JSON.
 `--plot timeline.pdf` renders the operational timeline — needs the `[plot]` extra (`uv sync --extra
