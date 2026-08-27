@@ -142,30 +142,3 @@ def test_placement_default_is_pack() -> None:
     default = schedule(jobs, policy="consolidated-backfill", num_nodes=2, node_gpus=8)
     assert [(j.job_id, j.nodes) for j in explicit.jobs] == [(j.job_id, j.nodes) for j in default.jobs]
 
-
-def test_job_metadata_is_forwarded_verbatim() -> None:
-    # Metadata present on some jobs, absent/empty on others — must pass through to JobRecord unchanged.
-    jobs = [
-        {"job_id": "a", "submit_s": 0, "gpus": 2, "duration_s": 10, "job_metadata": "tag:gpu-type=A100"},
-        {"job_id": "b", "submit_s": 0, "gpus": 2, "duration_s": 10, "job_metadata": ""},   # empty → None
-        {"job_id": "c", "submit_s": 0, "gpus": 2, "duration_s": 10},                        # absent → None
-    ]
-    res = schedule(jobs, policy="distributed-backfill", num_nodes=1, node_gpus=8)
-    by_id = {j.job_id: j for j in res.jobs}
-    assert by_id["a"].job_metadata == "tag:gpu-type=A100"
-    assert by_id["b"].job_metadata is None   # empty string normalised to None
-    assert by_id["c"].job_metadata is None   # missing key normalised to None
-
-
-def test_job_metadata_not_mixed_across_jobs() -> None:
-    # Each job's metadata must map to itself, not to any other job.
-    jobs = [
-        {"job_id": "x", "submit_s": 0, "gpus": 1, "duration_s": 5, "job_metadata": "meta-x"},
-        {"job_id": "y", "submit_s": 0, "gpus": 1, "duration_s": 5, "job_metadata": "meta-y"},
-        {"job_id": "z", "submit_s": 0, "gpus": 1, "duration_s": 5, "job_metadata": "meta-z"},
-    ]
-    res = schedule(jobs, policy="distributed-backfill", num_nodes=1, node_gpus=8)
-    by_id = {j.job_id: j for j in res.jobs}
-    assert by_id["x"].job_metadata == "meta-x"
-    assert by_id["y"].job_metadata == "meta-y"
-    assert by_id["z"].job_metadata == "meta-z"

@@ -47,7 +47,6 @@ class JobRecord:
     energy_kwh: float | None  # None when no per-GPU power is known
     nodes: tuple[tuple[int, int], ...]  # ((node_id, gpus_on_node), ...) the job was placed on
     dependencies: tuple[str, ...]  # job_id strings this job depends on (empty when none)
-    job_metadata: Any  # opaque tag forwarded verbatim from the input trace; None if absent
 
     @property
     def submit_h(self) -> float:
@@ -150,8 +149,7 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
     """Coerce ``list[dict] | list[tuple] | pandas.DataFrame`` into canonical job dicts.
 
     Canonical keys: ``submit_s``, ``gpus``, ``duration_s`` (required); ``nodes`` (default 1),
-    ``power_w_per_gpu`` (default None), ``job_id`` (default the row index),
-    ``job_metadata`` (default None — forwarded verbatim to the per-job output).
+    ``power_w_per_gpu`` (default None), ``job_id`` (default the row index).
     """
     if hasattr(jobs, "to_dict") and hasattr(jobs, "columns"):  # duck-typed pandas DataFrame
         rows: list[Mapping[str, Any]] = jobs.to_dict(orient="records")
@@ -168,14 +166,12 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
             power = row.get("power_w_per_gpu")
             job_id = row.get("job_id", index)
             deps_raw = row.get("dependencies")
-            job_metadata = row.get("job_metadata")  # optional opaque tag; None if absent
         elif isinstance(row, (Sequence, tuple)) and not isinstance(row, (str, bytes)):
             submit_s, gpus, duration_s = row[0], row[1], row[2]
             nodes = row[3] if len(row) > 3 else 1
             power = None
             job_id = index
             deps_raw = None
-            job_metadata = None
         else:
             raise TypeError(f"job {index} must be a mapping or a (submit_s, gpus, duration_s[, nodes]) tuple")
         if deps_raw and isinstance(deps_raw, str):
@@ -204,7 +200,6 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
                 "nodes": int(nodes) if nodes else 1,
                 "power_w_per_gpu": power_f,
                 "dependencies": dependencies,
-                "job_metadata": job_metadata or None,  # treat empty string as None
             }
         )
     return out
@@ -337,7 +332,6 @@ def schedule(
                 energy_kwh=energy_kwh,
                 nodes=placement.nodes,
                 dependencies=tuple(job["dependencies"]),
-                job_metadata=job["job_metadata"],
             )
         )
 
