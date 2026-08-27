@@ -5,9 +5,9 @@ used by plot-exp-jct-absolute.py, plot-exp-jct-ratio.py, and future experiment p
 
 Fix-job semantics
 -----------------
-A fix-job (prefix ``dynamic_oom_fix-``, metadata ``"fix_job"``) restarts a failed patched job.
-From the user's perspective the two rows represent a single job lifetime, so ``load_and_merge``
-folds the fix-job's metrics into its parent before returning:
+A fix-job (prefix ``dynamic_oom_fix-``, ``metadata.source`` value ``"fix_job"``) restarts a
+failed patched job. From the user's perspective the two rows represent a single job lifetime,
+so ``load_and_merge`` folds the fix-job's metrics into its parent before returning:
 
   turnaround_s  +=  fix.turnaround_s
   wait_s        +=  fix.wait_s
@@ -40,6 +40,7 @@ VALID_METADATA = {"baseline", "patched"}
 PATCHING_ENTITIES = {"min_gpu_recommender", "avoid_oom_recommender"}
 FIX_JOB_PREFIX = "dynamic_oom_fix-"
 FIX_JOB_METADATA = "fix_job"
+COL_METADATA = "metadata.source"
 
 
 # ---------------------------------------------------------------------------
@@ -63,30 +64,30 @@ def load_and_merge(path: Path) -> pd.DataFrame:
 
     Steps:
     1. Read CSV.
-    2. Validate: every ``job_metadata`` must be in ``VALID_METADATA | {FIX_JOB_METADATA}``.
+    2. Validate: every ``metadata.source`` must be in ``VALID_METADATA | {FIX_JOB_METADATA}``.
        Abort on any other value.
     3. For each fix-job row: look up its parent via the ``dependencies`` column (JSON array
        containing the parent's job_id); add the fix-job's ``turnaround_s``, ``wait_s``, and
        ``runtime_s`` onto the parent row.
     4. Drop all fix-job rows.
-    5. Return the merged DataFrame — all remaining rows have ``job_metadata`` in
+    5. Return the merged DataFrame — all remaining rows have ``metadata.source`` in
        ``{"baseline", "patched"}``.
     """
     df = pd.read_csv(path)
 
     # Validate metadata
     allowed = VALID_METADATA | {FIX_JOB_METADATA}
-    if "job_metadata" not in df.columns:
-        sys.exit(f"ERROR: {path} has no 'job_metadata' column.")
-    bad = df[~df["job_metadata"].isin(allowed)]
+    if COL_METADATA not in df.columns:
+        sys.exit(f"ERROR: {path} has no '{COL_METADATA}' column.")
+    bad = df[~df[COL_METADATA].isin(allowed)]
     if not bad.empty:
-        values = bad["job_metadata"].unique().tolist()
+        values = bad[COL_METADATA].unique().tolist()
         sys.exit(
-            f"ERROR: {path} contains invalid job_metadata values: {values}. "
+            f"ERROR: {path} contains invalid {COL_METADATA} values: {values}. "
             f"Only {sorted(allowed)} are allowed."
         )
 
-    fix_mask = df["job_metadata"] == FIX_JOB_METADATA
+    fix_mask = df[COL_METADATA] == FIX_JOB_METADATA
     if not fix_mask.any():
         return df.copy()
 
@@ -128,7 +129,7 @@ def group_mean_jct(df: pd.DataFrame) -> dict[str, float]:
     """
     result: dict[str, float] = {"all": float(df["turnaround_s"].mean()) / 3600}
     for group in ("baseline", "patched"):
-        subset = df.loc[df["job_metadata"] == group, "turnaround_s"]
+        subset = df.loc[df[COL_METADATA] == group, "turnaround_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
 
@@ -140,7 +141,7 @@ def group_mean_queuing(df: pd.DataFrame) -> dict[str, float]:
     """
     result: dict[str, float] = {"all": float(df["wait_s"].mean()) / 3600}
     for group in ("baseline", "patched"):
-        subset = df.loc[df["job_metadata"] == group, "wait_s"]
+        subset = df.loc[df[COL_METADATA] == group, "wait_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
 
@@ -152,6 +153,6 @@ def group_mean_runtime(df: pd.DataFrame) -> dict[str, float]:
     """
     result: dict[str, float] = {"all": float(df["runtime_s"].mean()) / 3600}
     for group in ("baseline", "patched"):
-        subset = df.loc[df["job_metadata"] == group, "runtime_s"]
+        subset = df.loc[df[COL_METADATA] == group, "runtime_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
