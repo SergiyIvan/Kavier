@@ -33,7 +33,7 @@ NODE_GPUS=8
 POLICY="consolidated-backfill"
 PLACEMENT_POLICY="spread"  # Default for Kubernetes (LeastAllocated).
 
-MAX_ITER=25
+MAX_ITER=100
 PERCENTAGES=(0 10 20 30 40 50 60 70 80 90 100)
 ITERATIONS=($(seq 1 "$MAX_ITER"))
 

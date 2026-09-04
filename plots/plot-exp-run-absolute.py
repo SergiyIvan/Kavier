@@ -79,11 +79,13 @@ def main() -> None:
             warnings.simplefilter("ignore", RuntimeWarning)
             means = np.nanmean(data[key], axis=1)
             stds  = np.nanstd(data[key], axis=1, ddof=1)
+            mins  = np.nanmin(data[key], axis=1)
+            maxs  = np.nanmax(data[key], axis=1)
 
         valid = ~np.isnan(means)
-        all_means.extend(means[valid].tolist())
+        all_means.extend(maxs[valid].tolist())
 
-        ax.errorbar(
+        eb = ax.errorbar(
             np.array(PERCENTAGES)[valid],
             means[valid],
             yerr=stds[valid],
@@ -92,11 +94,23 @@ def main() -> None:
             marker="o",
             capsize=4,
         )
+        color = eb[0].get_color()
+        lo = np.clip(means[valid] - mins[valid], 0, None)
+        hi = np.clip(maxs[valid] - means[valid], 0, None)
+        ax.errorbar(
+            np.array(PERCENTAGES)[valid],
+            means[valid],
+            yerr=[lo, hi],
+            linestyle="none",
+            capsize=2,
+            elinewidth=0.8,
+            color=color,
+        )
 
     ax.set_xlabel("Patched jobs (%)", fontsize=16)
     ax.set_ylabel("Mean runtime (h)", fontsize=16)
     ax.set_xlim(min(PERCENTAGES) - 5, max(PERCENTAGES) + 5)
-    ax.set_ylim(0, max(all_means) * 1.8 if all_means else 1)
+    ax.set_ylim(0, max(all_means) * 1.15 if all_means else 1)
     ax.set_xticks(PERCENTAGES)
     ax.grid(True)
     ax.tick_params(labelsize=14)
