@@ -54,16 +54,16 @@ def load_fix_pairs(path: Path) -> Optional[pd.DataFrame]:
     """
     df = pd.read_csv(path)
 
-    if "job_metadata" not in df.columns:
-        sys.exit(f"ERROR: {path} has no 'job_metadata' column.")
-    bad = df[~df["job_metadata"].isin(ALLOWED_METADATA)]
+    if "metadata.source" not in df.columns:
+        sys.exit(f"ERROR: {path} has no 'metadata.source' column.")
+    bad = df[~df["metadata.source"].isin(ALLOWED_METADATA)]
     if not bad.empty:
         sys.exit(
-            f"ERROR: {path} contains invalid job_metadata values: "
-            f"{bad['job_metadata'].unique().tolist()}."
+            f"ERROR: {path} contains invalid metadata.source values: "
+            f"{bad['metadata.source'].unique().tolist()}."
         )
 
-    fix_df = df[df["job_metadata"] == FIX_JOB_METADATA]
+    fix_df = df[df["metadata.source"] == FIX_JOB_METADATA]
     if fix_df.empty:
         return None
 
