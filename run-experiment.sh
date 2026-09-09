@@ -15,6 +15,9 @@
 #
 # Notation - "s" stands for "seed" (number of iteration), and "X" tells
 # the percentage of the patched jobs in the trace.
+#
+# This script also runs oracle-guided traces with suffix "-gpu_{hours|number}"
+
 
 DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
@@ -62,4 +65,7 @@ for x in "${PERCENTAGES[@]}"; do
     for seed in "${ITERATIONS[@]}"; do
         run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-s${seed}.csv
     done
+
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_hours.csv
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_number.csv
 done
