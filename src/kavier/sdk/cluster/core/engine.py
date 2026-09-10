@@ -32,6 +32,7 @@ class Job(NamedTuple):
     duration_s: float
     nodes: int
     dependencies: tuple[int, ...] = ()
+    priority: int = 0
 
 
 def job_schedulable(job: Job, completed: set[int]) -> bool:
@@ -206,14 +207,17 @@ def _assign_nodes(
     return assignments
 
 
-def run_backfill(jobs: list[Job], node_gpus: int, num_nodes: int, oversized: str = "cap") -> list[Placement]:
+def run_backfill(
+    jobs: list[Job], node_gpus: int, num_nodes: int, oversized: str = "cap", priorities: bool = False
+) -> list[Placement]:
     """Best-effort FIFO with aggressive backfill on a ``num_nodes x node_gpus`` cluster.
 
     Jobs are considered in submission order every tick; any queued job that fits (tight-pack,
     ``sum(free) >= gpus``) starts now, so a small later job backfills past a larger blocked one. Node
     IDs are assigned intrinsically by :func:`place`. A job wanting more than the whole cluster is
     capped to the total (``oversized="cap"``) or skipped (``"drop"``). The per-job ``nodes`` request
-    field is ignored — placement is automatic.
+    field is ignored — placement is automatic. When ``priorities=True`` the pending queue is re-sorted
+    before each tick by ``(-priority, submit_s)`` so higher-priority jobs are admitted first.
     """
     total = node_gpus * num_nodes
     prepared: list[tuple[int, float, int, float]] = []  # (idx, submit, gpus, duration)
@@ -247,6 +251,8 @@ def run_backfill(jobs: list[Job], node_gpus: int, num_nodes: int, oversized: str
             for node_id, count in freed:
                 free[node_id] += count
             completed.add(finished_idx)
+        if priorities:
+            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, t[1]))
         admitted: list[int] = []
         for queue_pos, (index, _submit, gpus, duration) in enumerate(pending):
             if not job_schedulable(job_by_idx[index], completed):
@@ -352,7 +358,12 @@ def run_fcfs_consolidated(
 
 
 def run_backfill_consolidated(
-    jobs: list[Job], node_gpus: int, num_nodes: int, oversized: str = "cap", spread: bool = False
+    jobs: list[Job],
+    node_gpus: int,
+    num_nodes: int,
+    oversized: str = "cap",
+    spread: bool = False,
+    priorities: bool = False,
 ) -> list[Placement]:
     """Best-effort FIFO + aggressive backfill with consolidated (gang) placement.
 
@@ -362,7 +373,8 @@ def run_backfill_consolidated(
     (co-located) instead of tight-packed across fragments. ``oversized`` is handled by
     :func:`_prepare_consolidated` (``"drop"`` skips an infeasible job; ``"cap"`` shrinks it).
     ``spread`` selects the node-order strategy: ``False`` (default) → bin-packing (least-free first);
-    ``True`` → ``LeastAllocated``-style (most-free first).
+    ``True`` → ``LeastAllocated``-style (most-free first). When ``priorities=True`` the pending queue
+    is re-sorted before each tick by ``(-priority, submit_s)`` so higher-priority jobs are admitted first.
     """
     prepared = _prepare_consolidated(jobs, num_nodes, node_gpus, oversized)
     if not prepared:
@@ -388,6 +400,8 @@ def run_backfill_consolidated(
             for node_id, count in freed:
                 free[node_id] += count
             completed.add(finished_idx)
+        if priorities:
+            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, t[1]))
         admitted: list[int] = []
         for queue_pos, (index, _submit, gpus, nodes, duration) in enumerate(pending):
             if not job_schedulable(job_by_idx[index], completed):

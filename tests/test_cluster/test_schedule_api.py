@@ -142,3 +142,103 @@ def test_placement_default_is_pack() -> None:
     default = schedule(jobs, policy="consolidated-backfill", num_nodes=2, node_gpus=8)
     assert [(j.job_id, j.nodes) for j in explicit.jobs] == [(j.job_id, j.nodes) for j in default.jobs]
 
+
+
+# ---------------------------------------------------------------------------
+# Priority scheduling tests
+# ---------------------------------------------------------------------------
+
+
+def _backfill_policies() -> list[str]:
+    return ["distributed-backfill", "consolidated-backfill"]
+
+
+@pytest.mark.parametrize("policy", _backfill_policies())
+def test_higher_priority_job_runs_before_lower_priority(policy: str) -> None:
+    """A higher-priority job submitted after a lower-priority one must start first
+    once resources are available, when enable_priorities=True.
+
+    Setup: single node with 4 GPUs. A blocker fills all 4 GPUs until t=100.
+    While the blocker runs, a low-priority (prio=1) and a high-priority (prio=10) job
+    both arrive, each wanting 4 GPUs (the full node). When the blocker finishes, only
+    one can run at a time — the high-priority job must start first.
+    """
+    jobs = [
+        {"job_id": "blocker", "submit_s": 0,  "gpus": 4, "duration_s": 100, "nodes": 1, "priority": 5},
+        {"job_id": "low",     "submit_s": 10, "gpus": 4, "duration_s": 10,  "nodes": 1, "priority": 1},
+        {"job_id": "high",    "submit_s": 11, "gpus": 4, "duration_s": 10,  "nodes": 1, "priority": 10},
+    ]
+    res = schedule(
+        jobs, policy=policy, num_nodes=1, node_gpus=4, enable_priorities=True
+    )
+    by_id = {j.job_id: j for j in res.jobs}
+    # high-priority job must start before low-priority job (both were waiting; high wins)
+    assert by_id["high"].start_s < by_id["low"].start_s, (
+        f"high-priority job started at {by_id['high'].start_s} but low started at {by_id['low'].start_s}"
+    )
+
+
+@pytest.mark.parametrize("policy", _backfill_policies())
+def test_equal_priority_preserves_fifo_order(policy: str) -> None:
+    """When all jobs share the same priority, arrival order (FIFO) must be preserved."""
+    jobs = [
+        {"job_id": "first",  "submit_s": 0, "gpus": 4, "duration_s": 10, "nodes": 1, "priority": 5},
+        {"job_id": "second", "submit_s": 1, "gpus": 4, "duration_s": 10, "nodes": 1, "priority": 5},
+        {"job_id": "third",  "submit_s": 2, "gpus": 4, "duration_s": 10, "nodes": 1, "priority": 5},
+    ]
+    res = schedule(
+        jobs, policy=policy, num_nodes=1, node_gpus=4, enable_priorities=True
+    )
+    by_id = {j.job_id: j for j in res.jobs}
+    assert by_id["first"].start_s <= by_id["second"].start_s <= by_id["third"].start_s
+
+
+@pytest.mark.parametrize("policy", _backfill_policies())
+def test_priority_column_absent_with_enable_priorities_raises(policy: str) -> None:
+    """enable_priorities=True with no priority column must raise ValueError before simulation."""
+    jobs = [
+        {"job_id": "a", "submit_s": 0, "gpus": 2, "duration_s": 10},
+        {"job_id": "b", "submit_s": 1, "gpus": 2, "duration_s": 10},
+    ]
+    with pytest.raises(ValueError, match="priority"):
+        schedule(jobs, policy=policy, num_nodes=1, node_gpus=8, enable_priorities=True)
+
+
+@pytest.mark.parametrize("policy", ["distributed-fcfs", "consolidated-fcfs"])
+def test_enable_priorities_with_fcfs_raises(policy: str) -> None:
+    """enable_priorities=True with a FCFS policy must raise ValueError."""
+    jobs = [{"job_id": "a", "submit_s": 0, "gpus": 2, "duration_s": 10, "priority": 1}]
+    with pytest.raises(ValueError, match="FCFS"):
+        schedule(jobs, policy=policy, num_nodes=1, node_gpus=8, enable_priorities=True)
+
+
+@pytest.mark.parametrize("policy", _backfill_policies())
+def test_priority_column_present_without_flag_is_ignored(policy: str) -> None:
+    """priority column in input with enable_priorities=False must not change scheduling."""
+    jobs_no_prio = [
+        {"job_id": "a", "submit_s": 0, "gpus": 4, "duration_s": 10, "nodes": 1},
+        {"job_id": "b", "submit_s": 0, "gpus": 4, "duration_s": 10, "nodes": 1},
+    ]
+    jobs_with_prio = [
+        {"job_id": "a", "submit_s": 0, "gpus": 4, "duration_s": 10, "nodes": 1, "priority": 999},
+        {"job_id": "b", "submit_s": 0, "gpus": 4, "duration_s": 10, "nodes": 1, "priority": 1},
+    ]
+    res_no = schedule(jobs_no_prio, policy=policy, num_nodes=1, node_gpus=8)
+    res_with = schedule(jobs_with_prio, policy=policy, num_nodes=1, node_gpus=8)
+    by_id_no = {j.job_id: j for j in res_no.jobs}
+    by_id_with = {j.job_id: j for j in res_with.jobs}
+    assert by_id_no["a"].start_s == by_id_with["a"].start_s
+    assert by_id_no["b"].start_s == by_id_with["b"].start_s
+
+
+@pytest.mark.parametrize("policy", _backfill_policies())
+def test_priority_is_written_to_job_record(policy: str) -> None:
+    """The priority value must be available on the returned JobRecord."""
+    jobs = [
+        {"job_id": "a", "submit_s": 0, "gpus": 2, "duration_s": 10, "nodes": 1, "priority": 7},
+        {"job_id": "b", "submit_s": 0, "gpus": 2, "duration_s": 10, "nodes": 1, "priority": 3},
+    ]
+    res = schedule(jobs, policy=policy, num_nodes=1, node_gpus=8, enable_priorities=True)
+    by_id = {j.job_id: j for j in res.jobs}
+    assert by_id["a"].priority == 7
+    assert by_id["b"].priority == 3

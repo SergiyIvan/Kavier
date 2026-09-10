@@ -35,6 +35,7 @@ _PER_JOB_FIELDS = (
     "node:gpus",
     "placement",
     "dependencies",
+    "priority",
 )
 
 _PER_NODE_FIELDS = (
@@ -82,6 +83,13 @@ def add_cluster_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
     parser.add_argument(
         "--watts-per-gpu", type=float, default=None, help="Fallback per-GPU power (W) for the energy estimate"
     )
+    parser.add_argument(
+        "--enable-priorities",
+        action="store_true",
+        default=False,
+        help="Enable priority-based scheduling (backfill policies only). Requires a 'priority' column in "
+        "the jobs CSV. Higher numeric values are scheduled first; ties are broken by submit_s (FIFO).",
+    )
     parser.add_argument("--out", default=None, help="Optional path to write the per-job schedule CSV")
     parser.add_argument("--out-nodes", default=None, help="Optional path to write the per-node CSV")
     parser.add_argument(
@@ -117,6 +125,8 @@ def _load_jobs(path: Path) -> list[dict[str, Any]]:
                 job["job_id"] = row["job_id"]
             if row.get("dependencies"):
                 job["dependencies"] = row["dependencies"]
+            if row.get("priority") not in (None, ""):
+                job["priority"] = int(row["priority"])
             if metadata_cols:
                 job["metadata"] = {col: row[col] for col in metadata_cols}
             jobs.append(job)
@@ -154,7 +164,7 @@ def _describe_nodes(nodes: tuple[tuple[int, int], ...]) -> str:
     return " + ".join(f"{gpus} GPU{'s' if gpus != 1 else ''} on node {node_id}" for node_id, gpus in nodes)
 
 
-_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies")
+_COMPUTED_JOB_FIELDS = ("node:gpus", "placement", "dependencies", "priority")
 
 
 def _write_per_job(
@@ -174,6 +184,7 @@ def _write_per_job(
             row["node:gpus"] = _format_nodes(job.nodes)
             row["placement"] = _describe_nodes(job.nodes)
             row["dependencies"] = json.dumps(list(job.dependencies)) if job.dependencies else ""
+            row["priority"] = job.priority
             meta = job_metadata.get(job.job_id, {})
             for col in meta_cols:
                 row[col] = meta.get(col, "")
@@ -214,6 +225,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             oversized=args.oversized,
             placement=args.placement,
             default_watts_per_gpu=args.watts_per_gpu,
+            enable_priorities=args.enable_priorities,
         )
     except (ValueError, KeyError) as exc:
         parser.error(str(exc))

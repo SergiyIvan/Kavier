@@ -47,6 +47,7 @@ class JobRecord:
     energy_kwh: float | None  # None when no per-GPU power is known
     nodes: tuple[tuple[int, int], ...]  # ((node_id, gpus_on_node), ...) the job was placed on
     dependencies: tuple[str, ...]  # job_id strings this job depends on (empty when none)
+    priority: int = 0  # scheduling priority; higher value = higher priority
 
     @property
     def submit_h(self) -> float:
@@ -190,6 +191,10 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
         power_f = None if power is None else float(power)
         if power_f is not None and math.isnan(power_f):
             power_f = None
+        if isinstance(row, Mapping):
+            priority_raw = row.get("priority")
+        else:
+            priority_raw = None
         out.append(
             {
                 "index": index,
@@ -200,6 +205,7 @@ def _normalise(jobs: Any) -> list[dict[str, Any]]:
                 "nodes": int(nodes) if nodes else 1,
                 "power_w_per_gpu": power_f,
                 "dependencies": dependencies,
+                "priority_raw": priority_raw,
             }
         )
     return out
@@ -238,6 +244,7 @@ def schedule(
     oversized: str = Oversized.CAP,
     placement: str = PlacementStrategy.PACK,
     default_watts_per_gpu: float | None = None,
+    enable_priorities: bool = False,
 ) -> ClusterSimResult:
     """Simulate ``jobs`` on a homogeneous ``num_nodes × node_gpus`` datacenter and return per-job,
     per-cluster, and per-node metrics.
@@ -265,6 +272,12 @@ def schedule(
         raise ValueError(f"placement must be one of {_PLACEMENTS}, got {placement!r}")
     if num_nodes is None or node_gpus is None:
         raise ValueError("cluster needs num_nodes and node_gpus (e.g. num_nodes=4, node_gpus=8)")
+    _FCFS_POLICIES = (Policy.DISTRIBUTED_FCFS, Policy.CONSOLIDATED_FCFS)
+    if enable_priorities and policy in _FCFS_POLICIES:
+        raise ValueError(
+            f"enable_priorities is not supported with FCFS policies ({policy!r}); "
+            "use distributed-backfill or consolidated-backfill"
+        )
     num_nodes = int(num_nodes)
     node_gpus = int(node_gpus)
     if num_nodes < 1 or node_gpus < 1:
@@ -273,6 +286,15 @@ def schedule(
 
     norm = _normalise(jobs)
     _validate_dependencies(norm)
+    if enable_priorities:
+        missing = [j["job_id"] for j in norm if j["priority_raw"] is None]
+        if missing:
+            raise ValueError(
+                f"enable_priorities=True but the following jobs have no 'priority' value: {missing}"
+            )
+    # Resolve final priority value: explicit int when present, 0 otherwise.
+    for j in norm:
+        j["priority"] = int(j["priority_raw"]) if j["priority_raw"] is not None else 0
     if oversized == Oversized.STRICT:
         for j in norm:
             if j["gpus"] > capacity:
@@ -285,17 +307,23 @@ def schedule(
     id_to_index: dict[str, int] = {str(j["job_id"]): j["index"] for j in norm}
     for j in norm:
         j["dep_indices"] = [id_to_index[d] for d in j["dependencies"]]
-    ejobs = [engine.Job(j["index"], j["submit_s"], j["gpus"], j["duration_s"], j["nodes"], tuple(j["dep_indices"])) for j in norm]
+    ejobs = [
+        engine.Job(
+            j["index"], j["submit_s"], j["gpus"], j["duration_s"], j["nodes"],
+            tuple(j["dep_indices"]), j["priority"],
+        )
+        for j in norm
+    ]
 
     spread = placement == PlacementStrategy.SPREAD
     if policy == Policy.DISTRIBUTED_FCFS:
         placements = engine.run_fcfs(ejobs, num_nodes, node_gpus, oversized)
     elif policy == Policy.DISTRIBUTED_BACKFILL:
-        placements = engine.run_backfill(ejobs, node_gpus, num_nodes, oversized)
+        placements = engine.run_backfill(ejobs, node_gpus, num_nodes, oversized, priorities=enable_priorities)
     elif policy == Policy.CONSOLIDATED_FCFS:
         placements = engine.run_fcfs_consolidated(ejobs, num_nodes, node_gpus, oversized, spread=spread)
     else:  # consolidated-backfill
-        placements = engine.run_backfill_consolidated(ejobs, node_gpus, num_nodes, oversized, spread=spread)
+        placements = engine.run_backfill_consolidated(ejobs, node_gpus, num_nodes, oversized, spread=spread, priorities=enable_priorities)
 
     placed = {p.idx: p for p in placements}
     # end_s keyed by job index — used to compute dependency-aware ready_s below.
@@ -332,6 +360,7 @@ def schedule(
                 energy_kwh=energy_kwh,
                 nodes=placement.nodes,
                 dependencies=tuple(job["dependencies"]),
+                priority=job["priority"],
             )
         )
 
