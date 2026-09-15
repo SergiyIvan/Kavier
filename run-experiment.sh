@@ -47,6 +47,7 @@ source $DIR/.venv/bin/activate
 
 function run_simulator {
     trace_path=$1
+    enable_priorities_flag=$2 # Optional
 
     trace_filename=$(basename -- "$trace_path")
     trace_name="${trace_filename%.*}"
@@ -55,7 +56,7 @@ function run_simulator {
 
     echo "Running $trace_name"
 
-    uv run kavier cluster --jobs $trace_path --policy $POLICY  --placement $PLACEMENT_POLICY --oversized strict --num-nodes $NUM_NODES --node-gpus $NODE_GPUS --out "$result_prefix"_per_jobs.csv --out-nodes "$result_prefix"_per_nodes.csv --plot "$result_prefix"_timeline.pdf > "$result_prefix"_per_cluster.json
+    uv run kavier cluster --jobs $trace_path --policy $POLICY  --placement $PLACEMENT_POLICY --oversized strict --num-nodes $NUM_NODES --node-gpus $NODE_GPUS $enable_priorities_flag --out "$result_prefix"_per_jobs.csv --out-nodes "$result_prefix"_per_nodes.csv --plot "$result_prefix"_timeline.pdf > "$result_prefix"_per_cluster.json
 
     echo ""
 }
@@ -63,9 +64,14 @@ function run_simulator {
 
 for x in "${PERCENTAGES[@]}"; do
     for seed in "${ITERATIONS[@]}"; do
-        run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-s${seed}.csv
+        run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-s${seed}.csv                                   # Random blend
+        run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-s${seed}.csv --enable-priorities               # Random blend + traditional priorities
+        run_simulator "$TRACES_DIR_PATH"/kavier-all-baseline-X${x}-s${seed}.csv --enable-priorities  # Traditional priorities
     done
 
-    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_hours.csv
-    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_number.csv
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_hours.csv   # Oracle blend 1
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_number.csv  # Oracle blend 2
+
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_hours.csv --enable-priorities   # Oracle blend 1 + traditional priorities
+    run_simulator "$TRACES_DIR_PATH"/kavier-X${x}-gpu_number.csv --enable-priorities  # Oracle blend 2 + traditional priorities
 done
