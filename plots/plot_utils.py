@@ -3,11 +3,19 @@
 Provides constants, data loading with fix-job merging, and per-group metric helpers
 used by plot-exp-jct-absolute.py, plot-exp-jct-ratio.py, and future experiment plots.
 
+Job groups
+----------
+Jobs in the trace carry a ``metadata.source`` tag that classifies them:
+
+  ``"participant"``     — jobs whose resource config was patched
+  ``"non_participant"`` — jobs that kept their original resource config
+  ``"fix_job"``           — OOM-restart shadow jobs (merged into their parent, then dropped)
+
 Fix-job semantics
 -----------------
 A fix-job (prefix ``dynamic_oom_fix-``, ``metadata.source`` value ``"fix_job"``) restarts a
-failed patched job. From the user's perspective the two rows represent a single job lifetime,
-so ``load_and_merge`` folds the fix-job's metrics into its parent before returning:
+failed participant job. From the user's perspective the two rows represent a single job
+lifetime, so ``load_and_merge`` folds the fix-job's metrics into its parent before returning:
 
   turnaround_s  +=  fix.turnaround_s
   wait_s        +=  fix.wait_s
@@ -36,7 +44,7 @@ SEEDS = list(range(1, ITERATION_COUNT + 1))
 # Job-classification constants
 # ---------------------------------------------------------------------------
 
-VALID_METADATA = {"baseline", "patched"}
+VALID_METADATA = {"non_participant", "participant"}
 PATCHING_ENTITIES = {"min_gpu_recommender", "avoid_oom_recommender"}
 FIX_JOB_PREFIX = "dynamic_oom_fix-"
 FIX_JOB_METADATA = "fix_job"
@@ -71,7 +79,7 @@ def load_and_merge(path: Path) -> pd.DataFrame:
        ``runtime_s`` onto the parent row.
     4. Drop all fix-job rows.
     5. Return the merged DataFrame — all remaining rows have ``metadata.source`` in
-       ``{"baseline", "patched"}``.
+       ``{"non_participant", "participant"}``.
     """
     df = pd.read_csv(path)
 
@@ -123,36 +131,36 @@ def load_and_merge(path: Path) -> pd.DataFrame:
 
 
 def group_mean_jct(df: pd.DataFrame) -> dict[str, float]:
-    """Return mean JCT in **hours** for each group: ``"baseline"``, ``"patched"``, ``"all"``.
+    """Return mean JCT in **hours** for each group: ``"non_participant"``, ``"participant"``, ``"all"``.
 
-    Returns ``NaN`` for a group that has no rows (e.g. no patched jobs at X=0).
+    Returns ``NaN`` for a group that has no rows (e.g. no participant jobs at X=0).
     """
     result: dict[str, float] = {"all": float(df["turnaround_s"].mean()) / 3600}
-    for group in ("baseline", "patched"):
+    for group in ("non_participant", "participant"):
         subset = df.loc[df[COL_METADATA] == group, "turnaround_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
 
 
 def group_mean_queuing(df: pd.DataFrame) -> dict[str, float]:
-    """Return mean queuing time in **hours** for each group: ``"baseline"``, ``"patched"``, ``"all"``.
+    """Return mean queuing time in **hours** for each group: ``"non_participant"``, ``"participant"``, ``"all"``.
 
-    Returns ``NaN`` for a group that has no rows (e.g. no patched jobs at X=0).
+    Returns ``NaN`` for a group that has no rows (e.g. no participant jobs at X=0).
     """
     result: dict[str, float] = {"all": float(df["wait_s"].mean()) / 3600}
-    for group in ("baseline", "patched"):
+    for group in ("non_participant", "participant"):
         subset = df.loc[df[COL_METADATA] == group, "wait_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result
 
 
 def group_mean_runtime(df: pd.DataFrame) -> dict[str, float]:
-    """Return mean run time in **hours** for each group: ``"baseline"``, ``"patched"``, ``"all"``.
+    """Return mean run time in **hours** for each group: ``"non_participant"``, ``"participant"``, ``"all"``.
 
-    Returns ``NaN`` for a group that has no rows (e.g. no patched jobs at X=0).
+    Returns ``NaN`` for a group that has no rows (e.g. no participant jobs at X=0).
     """
     result: dict[str, float] = {"all": float(df["runtime_s"].mean()) / 3600}
-    for group in ("baseline", "patched"):
+    for group in ("non_participant", "participant"):
         subset = df.loc[df[COL_METADATA] == group, "runtime_s"]
         result[group] = float(subset.mean()) / 3600 if not subset.empty else float("nan")
     return result

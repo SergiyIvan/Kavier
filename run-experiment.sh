@@ -53,8 +53,11 @@ function run_simulator {
     trace_name="${trace_filename%.*}"
 
     result_prefix="$RESULTS_DIR/$trace_name"
+    if [ -n "$enable_priorities_flag" ]; then
+        result_prefix="${result_prefix}-priorities"
+    fi
 
-    echo "Running $trace_name"
+    echo "Running $trace_name${enable_priorities_flag:+ (priorities)}"
 
     uv run kavier cluster --jobs $trace_path --policy $POLICY  --placement $PLACEMENT_POLICY --oversized strict --num-nodes $NUM_NODES --node-gpus $NODE_GPUS $enable_priorities_flag --out "$result_prefix"_per_jobs.csv --out-nodes "$result_prefix"_per_nodes.csv --plot "$result_prefix"_timeline.pdf > "$result_prefix"_per_cluster.json
 

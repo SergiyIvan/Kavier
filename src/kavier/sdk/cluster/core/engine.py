@@ -252,7 +252,7 @@ def run_backfill(
                 free[node_id] += count
             completed.add(finished_idx)
         if priorities:
-            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, t[1]))
+            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, job_by_idx[t[0]].submit_s))
         admitted: list[int] = []
         for queue_pos, (index, _submit, gpus, duration) in enumerate(pending):
             if not job_schedulable(job_by_idx[index], completed):
@@ -401,7 +401,7 @@ def run_backfill_consolidated(
                 free[node_id] += count
             completed.add(finished_idx)
         if priorities:
-            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, t[1]))
+            pending.sort(key=lambda t: (-job_by_idx[t[0]].priority, job_by_idx[t[0]].submit_s))
         admitted: list[int] = []
         for queue_pos, (index, _submit, gpus, nodes, duration) in enumerate(pending):
             if not job_schedulable(job_by_idx[index], completed):
